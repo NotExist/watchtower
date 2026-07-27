@@ -21,12 +21,29 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/nicholas-fedor/watchtower/internal/meta"
+	"github.com/nicholas-fedor/watchtower/pkg/recompress"
 	"github.com/nicholas-fedor/watchtower/pkg/registry/auth"
 	"github.com/nicholas-fedor/watchtower/pkg/registry/hosts"
 	"github.com/nicholas-fedor/watchtower/pkg/registry/manifest"
 	"github.com/nicholas-fedor/watchtower/pkg/registry/ratelimit"
 	"github.com/nicholas-fedor/watchtower/pkg/types"
 )
+
+// upstreamLabelDigest returns the upstream digest recorded on a recompressed
+// image (see the recompress package), or "" when absent. Recompressed images
+// have no RepoDigests — the label substitutes for them in staleness checks.
+func upstreamLabelDigest(container types.Container) string {
+	if !container.HasImageInfo() {
+		return ""
+	}
+
+	imageInfo := container.ImageInfo()
+	if imageInfo.Config == nil {
+		return ""
+	}
+
+	return imageInfo.Config.Labels[recompress.LabelUpstreamDigest]
+}
 
 // ContentDigestHeader is the HTTP header key used to retrieve the digest from a registry's response.
 // This header, typically "Docker-Content-Digest", contains the digest value (e.g., "sha256:abc...") for an image manifest,
@@ -285,7 +302,11 @@ func CompareDigestWithRemote(log *zerolog.Logger,
 	// 1. The container was already populated with image info during initialization
 	// 2. For locally built images, RepoDigests are either empty or registry-less
 	// 3. This avoids an extra Docker daemon call
-	if len(container.ImageInfo().RepoDigests) == 0 {
+	//
+	// Recompressed images (zstd fallback) also lack RepoDigests but carry the
+	// upstream digest in an image label, so they still get a remote comparison.
+	labelDigest := upstreamLabelDigest(container)
+	if len(container.ImageInfo().RepoDigests) == 0 && labelDigest == "" {
 		log.Debug().
 			Fields(fields).
 			Msg("Image with no registry reference detected (empty RepoDigests) - skipping digest comparison")
@@ -345,9 +366,18 @@ func CompareDigestWithRemote(log *zerolog.Logger,
 		}
 	}
 
-	// Compare the fetched remote digest with the container's local digests.
+	// Compare the fetched remote digest with the container's local digests,
+	// including the recompressed-image label digest when present.
+	localDigests := container.ImageInfo().RepoDigests
+	if labelDigest != "" {
+		localDigests = append(
+			append([]string{}, localDigests...),
+			"@"+FormatDigest(labelDigest),
+		)
+	}
+
 	matches := DigestsMatch(log,
-		container.ImageInfo().RepoDigests,
+		localDigests,
 		remoteDigest,
 	)
 	log.Debug().
@@ -555,7 +585,10 @@ func fetchDigest(log *zerolog.Logger,
 	}
 
 	// Skip digest fetching for locally built images (empty RepoDigests).
-	if container.HasImageInfo() && len(container.ImageInfo().RepoDigests) == 0 {
+	// Recompressed images carry the upstream digest in a label and still
+	// need the remote fetch for comparison.
+	if container.HasImageInfo() && len(container.ImageInfo().RepoDigests) == 0 &&
+		upstreamLabelDigest(container) == "" {
 		log.Debug().
 			Fields(fields).
 			Msg("Skipping digest fetch for locally built image")

@@ -208,6 +208,8 @@ var _ = ginkgo.Describe("the client", func() {
 				context.Background(),
 				"registry.example.com/app:latest",
 				dockerClient.ImagePullOptions{},
+				"",
+				"",
 			)
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		})
@@ -232,6 +234,8 @@ var _ = ginkgo.Describe("the client", func() {
 				context.Background(),
 				"ghcr.io/linuxserver/nginx:latest",
 				dockerClient.ImagePullOptions{},
+				"",
+				"",
 			)
 			gomega.Expect(err).To(gomega.HaveOccurred())
 			gomega.Expect(ratelimit.Is(err)).To(gomega.BeTrue())
@@ -256,6 +260,8 @@ var _ = ginkgo.Describe("the client", func() {
 				ctx,
 				"ghcr.io/linuxserver/nginx:latest",
 				dockerClient.ImagePullOptions{},
+				"",
+				"",
 			)
 			gomega.Expect(err).To(gomega.HaveOccurred())
 			gomega.Expect(ratelimit.Is(err)).To(gomega.BeTrue())
@@ -326,6 +332,8 @@ var _ = ginkgo.Describe("the client", func() {
 					ctx,
 					"ghcr.io/linuxserver/nginx:latest",
 					dockerClient.ImagePullOptions{RegistryAuth: "e30="},
+					"",
+					"",
 				)
 			}()
 
@@ -337,6 +345,8 @@ var _ = ginkgo.Describe("the client", func() {
 					ctx,
 					"ghcr.io/linuxserver/nginx:latest",
 					dockerClient.ImagePullOptions{},
+					"",
+					"",
 				)
 			}()
 
@@ -376,6 +386,8 @@ var _ = ginkgo.Describe("the client", func() {
 					ctx,
 					"ghcr.io/linuxserver/nginx:latest",
 					dockerClient.ImagePullOptions{},
+					"",
+					"",
 				)
 			}()
 
@@ -386,6 +398,8 @@ var _ = ginkgo.Describe("the client", func() {
 				ctx,
 				"registry.example.com/app:latest",
 				dockerClient.ImagePullOptions{},
+				"",
+				"",
 			)
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 			gomega.Expect(time.Since(started)).To(gomega.BeNumerically("<", 300*time.Millisecond))
@@ -433,6 +447,8 @@ var _ = ginkgo.Describe("the client", func() {
 					ctx,
 					"ghcr.io/linuxserver/nginx:latest",
 					dockerClient.ImagePullOptions{},
+					"",
+					"",
 				)
 			}()
 
@@ -444,6 +460,8 @@ var _ = ginkgo.Describe("the client", func() {
 					ctx,
 					"ghcr.io/linuxserver/radarr:latest",
 					dockerClient.ImagePullOptions{},
+					"",
+					"",
 				)
 			}()
 

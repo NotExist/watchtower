@@ -15,6 +15,7 @@ import (
 	dockerImage "github.com/moby/moby/api/types/image"
 	dockerClient "github.com/moby/moby/client"
 
+	"github.com/nicholas-fedor/watchtower/pkg/recompress"
 	"github.com/nicholas-fedor/watchtower/pkg/registry"
 	"github.com/nicholas-fedor/watchtower/pkg/registry/auth"
 	"github.com/nicholas-fedor/watchtower/pkg/registry/digest"
@@ -442,7 +443,15 @@ func (c imageClient) PullImage(
 		return cooldownErr
 	}
 
-	return c.performImagePull(ctx, sourceContainer.ImageName(), opts)
+	// Capture the running image's platform for the zstd fallback path; the
+	// replacement image must run where the current one does.
+	imageOS, imageArch := "", ""
+	if sourceContainer.HasImageInfo() {
+		imageOS = sourceContainer.ImageInfo().Os
+		imageArch = sourceContainer.ImageInfo().Architecture
+	}
+
+	return c.performImagePull(ctx, sourceContainer.ImageName(), opts, imageOS, imageArch)
 }
 
 // RemoveImageByID deletes an image from the Docker host.
@@ -685,7 +694,10 @@ func (c imageClient) shouldSkipPull(
 
 // performImagePull executes a full image pull.
 //
-// It pulls the image and reads the response to ensure completion.
+// It pulls the image and consumes the progress stream, surfacing in-stream
+// daemon errors (which the Docker API reports inside the JSON messages, not
+// as an HTTP failure). When the daemon cannot decompress zstd layers, the
+// recompress fallback pulls the image via registry-side gzip recompression.
 // The per-host pull slot is held only around the daemon ImagePull
 // so cooldown sleeps and pulls to other registries stay unblocked.
 //
@@ -693,6 +705,8 @@ func (c imageClient) shouldSkipPull(
 //   - ctx: Context for operation control.
 //   - imageName: Image to pull.
 //   - opts: Pull options with auth.
+//   - imageOS: Platform OS for the zstd fallback (empty = runtime default).
+//   - imageArch: Platform architecture for the zstd fallback (empty = runtime default).
 //
 // Returns:
 //   - error: Non-nil if pull or read fails, nil on success.
@@ -700,6 +714,8 @@ func (c imageClient) performImagePull(
 	ctx context.Context,
 	imageName string,
 	opts dockerClient.ImagePullOptions,
+	imageOS string,
+	imageArch string,
 ) error {
 	clogVal := c.logger().With().
 		Str("image", imageName).
@@ -790,6 +806,32 @@ func (c imageClient) performImagePull(
 		return nil
 	})
 	if pullErr != nil {
+		// Older daemons fail to extract zstd layers after downloading them. The
+		// signature is generic, so the fallback independently confirms zstd via
+		// the registry manifest before recompressing.
+		if recompress.Enabled() && recompress.IsZstdPullError(pullErr) {
+			clog.Info().
+				Err(pullErr).
+				Msg("Pull failed with a zstd-like error, attempting recompress fallback")
+
+			handled, fallbackErr := recompress.FallbackPull(clog,
+				ctx,
+				imageName,
+				opts.RegistryAuth,
+				imageOS,
+				imageArch,
+			)
+			if fallbackErr == nil && handled {
+				return nil
+			}
+
+			if fallbackErr != nil {
+				clog.Warn().
+					Err(fallbackErr).
+					Msg("Recompress fallback failed")
+			}
+		}
+
 		return fmt.Errorf("image pull: %w", pullErr)
 	}
 
