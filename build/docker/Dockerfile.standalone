@@ -1,0 +1,41 @@
+# Self-contained multi-arch build of this fork (zstd fallback).
+# Unlike build/docker/Dockerfile, this compiles from source in-image instead of
+# consuming goreleaser artifacts, so a single docker/build-push-action step can
+# publish the fork without the upstream release pipeline.
+ARG BUILDPLATFORM
+
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS builder
+
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=v0.0.0-unknown
+
+# containers_image_openpgp keeps the containers/image dependency pure Go (no
+# gpgme/CGO), matching the local development build.
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build \
+    -tags containers_image_openpgp \
+    -trimpath \
+    -ldflags "-s -w -X github.com/nicholas-fedor/watchtower/internal/meta.Version=${VERSION}" \
+    -o /watchtower .
+
+FROM scratch
+
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=builder /watchtower /watchtower
+
+EXPOSE 8080
+
+HEALTHCHECK CMD ["/watchtower", "--health-check"]
+
+ENTRYPOINT ["/watchtower"]
