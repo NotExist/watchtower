@@ -383,7 +383,7 @@ func TestImageClient_performImagePull(t *testing.T) {
 
 			i := newTestImageClient(api, newTestLogger(t), registryConfig.Registry{}, ratelimit.New())
 
-			require.NoError(t, i.performImagePull(t.Context(), "registry.example.com/app:latest", dockerClient.ImagePullOptions{}))
+			require.NoError(t, i.performImagePull(t.Context(), "registry.example.com/app:latest", dockerClient.ImagePullOptions{}, "", ""))
 		})
 
 		t.Run("returns a rate-limit error when the stream reports toomanyrequests", func(t *testing.T) {
@@ -393,7 +393,7 @@ func TestImageClient_performImagePull(t *testing.T) {
 
 			i := newTestImageClient(api, newTestLogger(t), registryConfig.Registry{}, ratelimit.New())
 
-			err := i.performImagePull(t.Context(), "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{})
+			err := i.performImagePull(t.Context(), "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{}, "", "")
 			assert.True(t, ratelimit.Is(err), "unexpected error %v", err)
 		})
 
@@ -407,7 +407,7 @@ func TestImageClient_performImagePull(t *testing.T) {
 
 			i := newTestImageClient(api, newTestLogger(t), registryConfig.Registry{}, ratelimit.New())
 
-			err := i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{})
+			err := i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{}, "", "")
 			assert.True(t, ratelimit.Is(err), "unexpected error %v", err)
 		})
 
@@ -425,7 +425,7 @@ func TestImageClient_performImagePull(t *testing.T) {
 
 			started := time.Now()
 
-			require.NoError(t, i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{}))
+			require.NoError(t, i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{}, "", ""))
 			// Two bucket waits of at least 100ms and 150ms separate the three pulls.
 			assert.GreaterOrEqual(t, time.Since(started), 250*time.Millisecond)
 		})
@@ -481,7 +481,7 @@ func TestImageClient_performImagePull(t *testing.T) {
 			authDone := make(chan error, 1)
 
 			go func() {
-				authDone <- i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{RegistryAuth: "e30="})
+				authDone <- i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{RegistryAuth: "e30="}, "", "")
 			}()
 
 			waitFor(t, authEntered, 5*time.Second)
@@ -489,7 +489,7 @@ func TestImageClient_performImagePull(t *testing.T) {
 			anonDone := make(chan error, 1)
 
 			go func() {
-				anonDone <- i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{})
+				anonDone <- i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{}, "", "")
 			}()
 
 			require.NoError(t, waitFor(t, anonDone, time.Second))
@@ -518,14 +518,14 @@ func TestImageClient_performImagePull(t *testing.T) {
 			blocked := make(chan error, 1)
 
 			go func() {
-				blocked <- i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{})
+				blocked <- i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{}, "", "")
 			}()
 
 			time.Sleep(50 * time.Millisecond)
 
 			started := time.Now()
 
-			require.NoError(t, i.performImagePull(ctx, "registry.example.com/app:latest", dockerClient.ImagePullOptions{}))
+			require.NoError(t, i.performImagePull(ctx, "registry.example.com/app:latest", dockerClient.ImagePullOptions{}, "", ""))
 			assert.Less(t, time.Since(started), 300*time.Millisecond)
 
 			// The ghcr.io pull is still waiting out the cooldown.
@@ -571,7 +571,7 @@ func TestImageClient_performImagePull(t *testing.T) {
 			firstErr := make(chan error, 1)
 
 			go func() {
-				firstErr <- i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{})
+				firstErr <- i.performImagePull(ctx, "ghcr.io/linuxserver/nginx:latest", dockerClient.ImagePullOptions{}, "", "")
 			}()
 
 			waitFor(t, firstEntered, 5*time.Second)
@@ -579,7 +579,7 @@ func TestImageClient_performImagePull(t *testing.T) {
 			secondErr := make(chan error, 1)
 
 			go func() {
-				secondErr <- i.performImagePull(ctx, "ghcr.io/linuxserver/radarr:latest", dockerClient.ImagePullOptions{})
+				secondErr <- i.performImagePull(ctx, "ghcr.io/linuxserver/radarr:latest", dockerClient.ImagePullOptions{}, "", "")
 			}()
 
 			time.Sleep(50 * time.Millisecond)
