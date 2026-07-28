@@ -30,6 +30,10 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 FROM scratch
 
+# Links the published package to its source repository on GHCR.
+ARG SOURCE_URL=https://github.com/nicholas-fedor/watchtower
+LABEL org.opencontainers.image.source=$SOURCE_URL
+
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=builder /watchtower /watchtower
