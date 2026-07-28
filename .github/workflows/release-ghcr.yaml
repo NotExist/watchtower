@@ -72,5 +72,6 @@ jobs:
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
