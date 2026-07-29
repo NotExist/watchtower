@@ -8,7 +8,7 @@
 // reconstruct what happened and restore affected containers.
 //
 // Layout under the blackbox directory (WATCHTOWER_BLACKBOX_DIR, default
-// /var/lib/watchtower/blackbox; set to "none" to disable):
+// /blackbox; set to "none" to disable):
 //
 //	containers/<name>-<shortID>-<unixts>.json  full inspect data per removal
 //	logs/watchtower-<startts>.log              runtime log tee (mirrors stdout)
@@ -38,7 +38,7 @@ const (
 	// defaultDir stores records inside the container by default. They survive
 	// a stop (inspectable via the exited instance) but not container removal —
 	// bind-mount the directory to persist across replacements.
-	defaultDir = "/var/lib/watchtower/blackbox"
+	defaultDir = "/blackbox"
 	// disabledValue disables the blackbox entirely.
 	disabledValue = "none"
 
