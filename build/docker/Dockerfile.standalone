@@ -35,6 +35,12 @@ FROM scratch
 ARG SOURCE_URL=https://github.com/NotExist/watchtower
 LABEL org.opencontainers.image.source=$SOURCE_URL
 
+# Watchtower identifies its own container by this label; every self-update
+# protection (skip in the stop phase, rename-based replacement) depends on it.
+# The upstream pipeline injects it via goreleaser's docker labels rather than
+# the Dockerfile, so a from-source build must declare it explicitly.
+LABEL com.centurylinklabs.watchtower="true"
+
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=builder /watchtower /watchtower
