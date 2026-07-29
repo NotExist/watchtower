@@ -41,6 +41,13 @@ LABEL org.opencontainers.image.source=$SOURCE_URL
 # the Dockerfile, so a from-source build must declare it explicitly.
 LABEL com.centurylinklabs.watchtower="true"
 
+# Last-resort persistence for the blackbox (container snapshots + log tee):
+# without an explicit bind mount, records land in an anonymous volume that
+# survives container removal under default settings (no --remove-volumes,
+# no volume prune), recoverable via `docker volume ls -f dangling=true`.
+# An explicit -v <path>:/blackbox overrides this entirely.
+VOLUME /blackbox
+
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=builder /watchtower /watchtower
