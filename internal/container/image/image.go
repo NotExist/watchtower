@@ -15,7 +15,6 @@ import (
 	dockerImage "github.com/moby/moby/api/types/image"
 	dockerClient "github.com/moby/moby/client"
 
-	"github.com/nicholas-fedor/watchtower/pkg/recompress"
 	"github.com/nicholas-fedor/watchtower/internal/container/oci"
 	"github.com/nicholas-fedor/watchtower/internal/observability/logging"
 	"github.com/nicholas-fedor/watchtower/internal/registry"
@@ -23,6 +22,7 @@ import (
 	"github.com/nicholas-fedor/watchtower/internal/registry/digest"
 	"github.com/nicholas-fedor/watchtower/internal/registry/ratelimit"
 	registryConfig "github.com/nicholas-fedor/watchtower/internal/settings/config/registry"
+	"github.com/nicholas-fedor/watchtower/pkg/recompress"
 	"github.com/nicholas-fedor/watchtower/pkg/types"
 )
 
@@ -794,6 +794,37 @@ func (c Client) shouldSkipPull(
 
 		return false, nil
 	}
+}
+
+// PullImageDirect pulls an image by name without an associated container,
+// using the same zstd-safe path as container updates: a native daemon pull
+// first, then the gzip-recompression fallback when the daemon cannot handle
+// zstd layers. Intended for CLI/manual pulls of images not yet present on
+// the host (a native pull of a fresh zstd image fails outright there).
+//
+// Parameters:
+//   - log: Logger for progress and diagnostics.
+//   - ctx: Context for operation control.
+//   - api: Docker API client.
+//   - imageName: Image reference to pull (tag or digest form).
+//
+// Returns:
+//   - error: Non-nil if both the native pull and the fallback fail.
+func PullImageDirect(log *zerolog.Logger, ctx context.Context, api dockerClient.APIClient, imageName string) error {
+	opts, err := registry.GetPullOptions(log, imageName)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", errPullImageFailed, imageName, err)
+	}
+
+	// Empty OS/arch let the fallback default to the binary's own platform,
+	// which matches the daemon on a same-host deployment.
+	return NewClient(api, log, registryConfig.Registry{}, ratelimit.New()).performImagePull(
+		ctx,
+		imageName,
+		opts,
+		"",
+		"",
+	)
 }
 
 // performImagePull executes a full image pull.

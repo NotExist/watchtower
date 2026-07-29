@@ -10,6 +10,7 @@ Available Commands:
   completion     Generate the autocompletion script for the specified shell
   help           Help about any command
   notify-upgrade Upgrade legacy notification configuration to shoutrrr URLs
+  pull           Pull images with the zstd fallback (for daemons that cannot pull zstd layers)
 
 Flags:
   -a, --api-version string                          api version to use by docker client (omit for autonegotiation)
