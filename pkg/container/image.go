@@ -692,6 +692,37 @@ func (c imageClient) shouldSkipPull(
 	}
 }
 
+// PullImageDirect pulls an image by name without an associated container,
+// using the same zstd-safe path as container updates: a native daemon pull
+// first, then the gzip-recompression fallback when the daemon cannot handle
+// zstd layers. Intended for CLI/manual pulls of images not yet present on
+// the host (a native pull of a fresh zstd image fails outright there).
+//
+// Parameters:
+//   - log: Logger for progress and diagnostics.
+//   - ctx: Context for operation control.
+//   - api: Docker API client.
+//   - imageName: Image reference to pull (tag or digest form).
+//
+// Returns:
+//   - error: Non-nil if both the native pull and the fallback fail.
+func PullImageDirect(log *zerolog.Logger, ctx context.Context, api dockerClient.APIClient, imageName string) error {
+	opts, err := registry.GetPullOptions(log, imageName)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", errPullImageFailed, imageName, err)
+	}
+
+	// Empty OS/arch let the fallback default to the binary's own platform,
+	// which matches the daemon on a same-host deployment.
+	return newImageClient(api, log).performImagePull(
+		ctx,
+		imageName,
+		opts,
+		"",
+		"",
+	)
+}
+
 // performImagePull executes a full image pull.
 //
 // It pulls the image and consumes the progress stream, surfacing in-stream
