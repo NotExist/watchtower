@@ -15,6 +15,7 @@ import (
 	"github.com/nicholas-fedor/watchtower/internal/api"
 	"github.com/nicholas-fedor/watchtower/internal/api/config"
 	"github.com/nicholas-fedor/watchtower/internal/api/handlers/events"
+	"github.com/nicholas-fedor/watchtower/internal/blackbox"
 	appConfig "github.com/nicholas-fedor/watchtower/internal/config"
 	"github.com/nicholas-fedor/watchtower/internal/flags"
 	"github.com/nicholas-fedor/watchtower/internal/logging"
@@ -447,6 +448,20 @@ func (p *process) run(command *cobra.Command, args []string) {
 		}
 
 		return
+	}
+
+	// Mirror the runtime log into the blackbox directory, now that the
+	// health-check short-circuit above is passed: a health-check invocation
+	// exits without logging, so opening a file there would only churn the log
+	// ring with empty files. A self-update removes the old container together
+	// with its `docker logs`, so this copy may be the only surviving record.
+	if bbWriter := blackbox.OpenLogWriter(p.log); bbWriter != nil {
+		teed, teeErr := flags.SetupLogging(p.log, command.PersistentFlags(), bbWriter)
+		if teeErr != nil {
+			p.log.Warn().Err(teeErr).Msg("Failed to enable blackbox log tee")
+		} else {
+			p.log = teed
+		}
 	}
 
 	cfg, err := appCfg.BuildRunConfig(appConfig.RunConfigInput{

@@ -16,6 +16,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 
+	"github.com/nicholas-fedor/watchtower/internal/blackbox"
 	"github.com/nicholas-fedor/watchtower/pkg/compose"
 	"github.com/nicholas-fedor/watchtower/pkg/container"
 	"github.com/nicholas-fedor/watchtower/pkg/filters"
@@ -1758,6 +1759,11 @@ func stopStaleContainer(log *zerolog.Logger, ctx context.Context,
 			return errSkipUpdate
 		}
 	}
+
+	// Blackbox: persist the full container definition before destroying it,
+	// so an interrupted session cannot leave a removed container without a
+	// recoverable configuration.
+	blackbox.RecordContainerSnapshot(log, container)
 
 	// Stop the container with the configured timeout.
 	err := client.StopAndRemoveContainer(

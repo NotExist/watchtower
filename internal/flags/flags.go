@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -548,7 +549,7 @@ func ProcessFlagAliases(log *zerolog.Logger, flags *pflag.FlagSet) {
 // Returns:
 //   - *zerolog.Logger: Logger with format writer and level applied.
 //   - error: Non-nil if config fails, nil on success.
-func SetupLogging(log *zerolog.Logger, flags *pflag.FlagSet) (*zerolog.Logger, error) {
+func SetupLogging(log *zerolog.Logger, flags *pflag.FlagSet, extraWriters ...io.Writer) (*zerolog.Logger, error) {
 	logFormat, err := flags.GetString("log-format")
 	if err != nil {
 		log.Debug().
@@ -585,6 +586,12 @@ func SetupLogging(log *zerolog.Logger, flags *pflag.FlagSet) (*zerolog.Logger, e
 			Msg("Invalid log format specified")
 
 		return log, fmt.Errorf("%w: %w", errInvalidLogFormat, err)
+	}
+
+	// Tee into any extra writers (for example the blackbox log file) so the
+	// mirrored copy matches stdout content and format exactly.
+	if len(extraWriters) > 0 {
+		writer = zerolog.MultiLevelWriter(append([]io.Writer{writer}, extraWriters...)...)
 	}
 
 	// Rebuild with the format writer, preserving the current level until
