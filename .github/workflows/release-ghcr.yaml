@@ -64,9 +64,13 @@ jobs:
           context: .
           file: build/docker/Dockerfile.standalone
           platforms: linux/amd64,linux/arm64
-          push: true
-          # gzip layer compression (the buildx default) is required here: the
-          # whole point of this fork is serving daemons that cannot pull zstd.
+          # Pin gzip layer compression explicitly. It is the buildx default
+          # today, but this fork exists precisely because publishers drift to
+          # zstd (via tooling defaults, not the Dockerfile), which old daemons
+          # cannot pull. force-compression re-compresses every layer to gzip so
+          # a future default flip or base change can never ship a zstd image
+          # that our own tool could not bootstrap onto an old daemon.
+          outputs: type=image,compression=gzip,force-compression=true,push=true
           tags: |
             ${{ steps.meta.outputs.image }}:latest
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
