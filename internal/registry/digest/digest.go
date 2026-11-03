@@ -195,6 +195,18 @@ func CompareDigest(
 	return match, err
 }
 
+// IsManifestNotFound reports whether err came from the registry answering 404
+// for the manifest request, meaning it no longer serves the image reference.
+//
+// Parameters:
+//   - err: Error returned from a digest comparison or fetch.
+//
+// Returns:
+//   - bool: True if the registry reported the manifest as not found.
+func IsManifestNotFound(err error) bool {
+	return errors.Is(err, errManifestNotFound)
+}
+
 // isLocalImageNotFound reports whether the digest fetch failed because the
 // registry returned 404 for a manifest request and the container's image looks
 // local-only: domain-less Config.Image and no registry-qualified RepoDigests.

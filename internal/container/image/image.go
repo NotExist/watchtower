@@ -207,11 +207,7 @@ func (c Client) IsContainerStale(
 		}
 
 		if errors.Is(err, errPullImageNotFound) {
-			clog.Debug().
-				Err(err).
-				Msg("Image not found in any registry - treating as up-to-date")
-
-			return false, sourceContainer.ImageID(), "", nil
+			return c.staleFromLocalTag(ctx, sourceContainer, clog, err)
 		}
 
 		clog.Debug().
@@ -222,6 +218,56 @@ func (c Client) IsContainerStale(
 	}
 
 	return c.HasNewImage(ctx, sourceContainer)
+}
+
+// staleFromLocalTag decides staleness when the registry no longer serves the
+// container's image reference (for example a removed "latest" tag).
+//
+// A missing registry tag does not mean the local tag is unchanged: an operator
+// may have pulled a replacement and retagged it locally. Before concluding the
+// container is up-to-date, compare its image ID with the image the local tag
+// resolves to, exactly as the no-pull path does. Only when the local tag cannot
+// be inspected either is the container treated as up-to-date.
+//
+// Parameters:
+//   - ctx: Context for operation control.
+//   - sourceContainer: Container whose image was not found in the registry.
+//   - clog: Logger with container and image fields.
+//   - pullErr: The not-found error from the pull attempt, for logging.
+//
+// Returns:
+//   - bool: True if the local tag points at a different image ID.
+//   - types.ImageID: Image ID the local tag resolves to, or the current ID.
+//   - string: Latest known manifest digest (empty if unavailable).
+//   - error: Always nil; a failed local inspection falls back to up-to-date.
+func (c Client) staleFromLocalTag(
+	ctx context.Context,
+	sourceContainer types.Container,
+	clog *zerolog.Logger,
+	pullErr error,
+) (bool, types.ImageID, string, error) {
+	stale, latestID, latestDigest, err := c.HasNewImage(ctx, sourceContainer)
+	if err != nil {
+		clog.Debug().
+			Err(pullErr).
+			AnErr("local_inspect_error", err).
+			Msg("Image not found in any registry or locally - treating as up-to-date")
+
+		return false, sourceContainer.ImageID(), "", nil
+	}
+
+	if stale {
+		clog.Info().
+			Err(pullErr).
+			Str("new_id", latestID.ShortID()).
+			Msg("Image not found in any registry, but the local tag points at a different image")
+	} else {
+		clog.Debug().
+			Err(pullErr).
+			Msg("Image not found in any registry and the local tag is unchanged - treating as up-to-date")
+	}
+
+	return stale, latestID, latestDigest, nil
 }
 
 // CheckContainerUpdate reports whether a newer image is available without
@@ -292,6 +338,12 @@ func (c Client) CheckContainerUpdate(
 		endpoints...,
 	)
 	if err != nil {
+		// A removed registry tag is judged by the same local-tag comparison
+		// IsContainerStale applies after its pull reports not-found.
+		if digest.IsManifestNotFound(err) {
+			return c.staleFromLocalTag(ctx, sourceContainer, clog, err)
+		}
+
 		clog.Debug().
 			Err(err).
 			Msg("Failed to compare registry digests")
@@ -300,6 +352,16 @@ func (c Client) CheckContainerUpdate(
 	}
 
 	if match {
+		// Matching registry digests still leave room for a locally retagged
+		// image; IsContainerStale compares image IDs after a skipped pull too.
+		if stale, localID, _, inspectErr := c.HasNewImage(ctx, sourceContainer); inspectErr == nil && stale {
+			clog.Info().
+				Str("new_id", localID.ShortID()).
+				Msg("Registry digest is unchanged, but the local tag points at a different image")
+
+			return true, localID, remoteDigest, nil
+		}
+
 		clog.Debug().
 			Str("latest_digest", remoteDigest).
 			Msg("No update available")
