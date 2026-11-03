@@ -115,6 +115,33 @@ func digestRegistry(t *testing.T, remoteDigest string) *httpstub.Server {
 	return server
 }
 
+// missingTagRegistry starts a registry that accepts the /v2/ challenge but
+// answers the manifest request with 404, as a registry does once a tag is
+// removed.
+//
+// Parameters:
+//   - t: Test that owns the server.
+//
+// Returns:
+//   - *httpstub.Server: The running registry.
+func missingTagRegistry(t *testing.T) *httpstub.Server {
+	t.Helper()
+
+	server := httpstub.New(t)
+	server.AppendHandlers(
+		httpstub.CombineHandlers(
+			httpstub.VerifyRequest(t, http.MethodGet, httpstub.Path("/v2/")),
+			httpstub.RespondWith(http.StatusOK, "", nil),
+		),
+		httpstub.CombineHandlers(
+			httpstub.VerifyRequest(t, http.MethodHead, httpstub.Path("/v2/test/image/manifests/latest")),
+			httpstub.RespondWith(http.StatusNotFound, "", nil),
+		),
+	)
+
+	return server
+}
+
 // waitFor returns the value ch delivers within timeout, and fails the test when
 // none arrives.
 //
@@ -972,6 +999,73 @@ func TestImageClient_IsContainerStale_pull(t *testing.T) {
 			assert.Contains(t, logbuf.String(), "Found new image")
 		})
 	})
+
+	// The registry no longer serves the tag, so both the digest check and the
+	// pull report not-found. A local retag may still have replaced the image.
+	t.Run("the registry no longer serves the image tag", func(t *testing.T) {
+		notFoundPull := func(image string) error {
+			return cerrdefs.ErrNotFound.WithMessage("manifest for " + image + " not found")
+		}
+
+		t.Run("reports the container as stale when the local tag points at a different image", func(t *testing.T) {
+			currentImageID := "sha256:" + containerfixture.RandomID()
+			retaggedImageID := "sha256:" + containerfixture.RandomID()
+			image := notFoundRegistry(t) + "/test/image:latest"
+			repoDigest := image + "@sha256:" + containerfixture.RandomID()
+
+			api := newImageAPI(t)
+			api.EXPECT().ImagePull(mock.Anything, image, mock.Anything).Return(nil, notFoundPull(image)).Once()
+			api.EXPECT().ImageInspect(mock.Anything, image).Return(inspected(retaggedImageID), nil).Once()
+
+			log, logbuf := logcapture.New(zerolog.DebugLevel)
+			c := newTestImageClient(api, log, registryConfig.Registry{TLSSkip: true}, ratelimit.New())
+
+			stale, latestID, _, err := c.IsContainerStale(t.Context(), runningImage(image, currentImageID, repoDigest), types.UpdateParams{}, "")
+			require.NoError(t, err)
+			assert.True(t, stale)
+			assert.Equal(t, retaggedImageID, string(latestID))
+			assert.Contains(t, logbuf.String(), "the local tag points at a different image")
+		})
+
+		t.Run("treats the container as up-to-date when the local tag is unchanged", func(t *testing.T) {
+			currentImageID := "sha256:" + containerfixture.RandomID()
+			image := notFoundRegistry(t) + "/test/image:latest"
+			repoDigest := image + "@sha256:" + containerfixture.RandomID()
+
+			api := newImageAPI(t)
+			api.EXPECT().ImagePull(mock.Anything, image, mock.Anything).Return(nil, notFoundPull(image)).Once()
+			api.EXPECT().ImageInspect(mock.Anything, image).Return(inspected(currentImageID, repoDigest), nil).Once()
+
+			log, logbuf := logcapture.New(zerolog.DebugLevel)
+			c := newTestImageClient(api, log, registryConfig.Registry{TLSSkip: true}, ratelimit.New())
+
+			stale, latestID, _, err := c.IsContainerStale(t.Context(), runningImage(image, currentImageID, repoDigest), types.UpdateParams{}, "")
+			require.NoError(t, err)
+			assert.False(t, stale)
+			assert.Equal(t, currentImageID, string(latestID))
+			assert.Contains(t, logbuf.String(), "the local tag is unchanged")
+		})
+
+		t.Run("treats the container as up-to-date when the local tag cannot be inspected", func(t *testing.T) {
+			currentImageID := "sha256:" + containerfixture.RandomID()
+			image := notFoundRegistry(t) + "/test/image:latest"
+			repoDigest := image + "@sha256:" + containerfixture.RandomID()
+
+			api := newImageAPI(t)
+			api.EXPECT().ImagePull(mock.Anything, image, mock.Anything).Return(nil, notFoundPull(image)).Once()
+			api.EXPECT().ImageInspect(mock.Anything, image).Return(dockerClient.ImageInspectResult{}, cerrdefs.ErrNotFound.WithMessage("no such image")).Once()
+
+			log, logbuf := logcapture.New(zerolog.DebugLevel)
+			c := newTestImageClient(api, log, registryConfig.Registry{TLSSkip: true}, ratelimit.New())
+
+			stale, latestID, latestDigest, err := c.IsContainerStale(t.Context(), runningImage(image, currentImageID, repoDigest), types.UpdateParams{}, "")
+			require.NoError(t, err)
+			assert.False(t, stale)
+			assert.Equal(t, currentImageID, string(latestID))
+			assert.Empty(t, latestDigest)
+			assert.Contains(t, logbuf.String(), "not found in any registry or locally")
+		})
+	})
 }
 
 // TestIsImagePinnedByDigest verifies which image references are pinned by a
@@ -1067,7 +1161,9 @@ func TestImageClient_CheckContainerUpdate(t *testing.T) {
 			t.Parallel()
 
 			currentImageID := "sha256:" + containerfixture.RandomID()
-			c := newTestImageClient(newImageAPI(t), newTestLogger(t), registryConfig.Registry{}, ratelimit.New())
+			api := newImageAPI(t)
+			api.EXPECT().ImageInspect(mock.Anything, "local-build:latest").Return(inspected(currentImageID), nil).Once()
+			c := newTestImageClient(api, newTestLogger(t), registryConfig.Registry{}, ratelimit.New())
 
 			available, latestID, latestDigest, err := c.CheckContainerUpdate(t.Context(), runningImage("local-build:latest", currentImageID, []string{}...), types.UpdateParams{})
 			require.NoError(t, err)
@@ -1089,8 +1185,12 @@ func TestImageClient_CheckContainerUpdate(t *testing.T) {
 			registry := digestRegistry(t, localDigest)
 			image := registry.Addr() + "/test/image:latest"
 
+			// The unchanged local tag keeps the container up-to-date.
+			api := newImageAPI(t)
+			api.EXPECT().ImageInspect(mock.Anything, image).Return(inspected(currentImageID), nil).Once()
+
 			// The test registry serves plain HTTP.
-			c := newTestImageClient(newImageAPI(t), newTestLogger(t), registryConfig.Registry{TLSSkip: true}, ratelimit.New())
+			c := newTestImageClient(api, newTestLogger(t), registryConfig.Registry{TLSSkip: true}, ratelimit.New())
 
 			available, latestID, latestDigest, err := c.CheckContainerUpdate(t.Context(), runningImage(image, currentImageID, registry.Addr()+"/test/image@"+localDigest), types.UpdateParams{})
 			require.NoError(t, err)
@@ -1098,6 +1198,27 @@ func TestImageClient_CheckContainerUpdate(t *testing.T) {
 			assert.Equal(t, types.ImageID(currentImageID), latestID)
 			assert.Equal(t, localDigest, latestDigest)
 			assert.Len(t, registry.ReceivedRequests(), 2)
+		})
+
+		t.Run("reports update available when the digest matches but the local tag was retagged", func(t *testing.T) {
+			t.Parallel()
+
+			localDigest := "sha256:" + containerfixture.RandomID()
+			currentImageID := "sha256:" + containerfixture.RandomID()
+			retaggedImageID := "sha256:" + containerfixture.RandomID()
+
+			registry := digestRegistry(t, localDigest)
+			image := registry.Addr() + "/test/image:latest"
+
+			api := newImageAPI(t)
+			api.EXPECT().ImageInspect(mock.Anything, image).Return(inspected(retaggedImageID), nil).Once()
+
+			c := newTestImageClient(api, newTestLogger(t), registryConfig.Registry{TLSSkip: true}, ratelimit.New())
+
+			available, latestID, _, err := c.CheckContainerUpdate(t.Context(), runningImage(image, currentImageID, registry.Addr()+"/test/image@"+localDigest), types.UpdateParams{})
+			require.NoError(t, err)
+			assert.True(t, available)
+			assert.Equal(t, retaggedImageID, string(latestID))
 		})
 
 		t.Run("reports update available when remote digest differs from local RepoDigests", func(t *testing.T) {
@@ -1121,6 +1242,64 @@ func TestImageClient_CheckContainerUpdate(t *testing.T) {
 			assert.Len(t, registry.ReceivedRequests(), 2)
 		})
 	})
+}
+
+// TestImageClient_CheckContainerUpdate_notFound verifies that a registry that
+// no longer serves the tag is judged by the local tag, as IsContainerStale does.
+func TestImageClient_CheckContainerUpdate_notFound(t *testing.T) {
+	t.Parallel()
+
+	currentImageID := "sha256:" + containerfixture.RandomID()
+
+	tests := []struct {
+		name      string
+		inspect   func(image string) (dockerClient.ImageInspectResult, error)
+		available bool
+		latestID  string
+	}{
+		{
+			name: "reports an update when the local tag points at a different image",
+			inspect: func(string) (dockerClient.ImageInspectResult, error) {
+				return inspected("sha256:retagged"), nil
+			},
+			available: true,
+			latestID:  "sha256:retagged",
+		},
+		{
+			name: "reports no update when the local tag is unchanged",
+			inspect: func(string) (dockerClient.ImageInspectResult, error) {
+				return inspected(currentImageID), nil
+			},
+			latestID: currentImageID,
+		},
+		{
+			name: "reports no update when the local tag cannot be inspected",
+			inspect: func(string) (dockerClient.ImageInspectResult, error) {
+				return dockerClient.ImageInspectResult{}, cerrdefs.ErrNotFound
+			},
+			latestID: currentImageID,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			image := missingTagRegistry(t).Addr() + "/test/image:latest"
+			repoDigest := image + "@sha256:" + containerfixture.RandomID()
+
+			result, inspectErr := tt.inspect(image)
+			api := newImageAPI(t)
+			api.EXPECT().ImageInspect(mock.Anything, image).Return(result, inspectErr).Once()
+
+			c := newTestImageClient(api, newTestLogger(t), registryConfig.Registry{TLSSkip: true}, ratelimit.New())
+
+			available, latestID, _, err := c.CheckContainerUpdate(t.Context(), runningImage(image, currentImageID, repoDigest), types.UpdateParams{})
+			require.NoError(t, err)
+			assert.Equal(t, tt.available, available)
+			assert.Equal(t, tt.latestID, string(latestID))
+		})
+	}
 }
 
 // TestExtractImageDigest verifies that the digest reported for an image comes
